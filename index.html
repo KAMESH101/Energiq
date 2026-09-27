@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EnergiQ — Smart Energy Dashboard</title>
+  <meta name="description" content="Predictive energy monitoring and savings recommendations for VIT Smart Campus." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2322d3ee'%3E%3Cpath d='M13 2 3 14h9l-1 8 10-12h-9l1-8z'/%3E%3C/svg%3E" />
+  <script>
+    try { var t = localStorage.getItem('energiq-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+  </script>
+  <!-- Boot screen styles are inline so the loader paints before the JS/CSS bundle arrives -->
+  <style>
+    html, body { margin: 0; background: #050a12; }
+    html[data-theme="light"], html[data-theme="light"] body { background: #f8fafc; }
+    #boot { position: fixed; inset: 0; z-index: 100; background: inherit; display: flex; align-items: center; justify-content: center; flex-direction: column; font-family: Inter, -apple-system, sans-serif; color: #f0f4f8; transition: opacity .6s cubic-bezier(.16,1,.3,1), visibility .6s; }
+    html[data-theme="light"] #boot { color: #0f172a; }
+    #boot.hide { opacity: 0; visibility: hidden; }
+    #boot .logo { display: flex; align-items: center; gap: 12px; font-size: 40px; font-weight: 800; letter-spacing: -0.03em; animation: bootLogo 1.6s ease-in-out infinite; }
+    #boot .logo svg { filter: drop-shadow(0 0 18px rgba(34,211,238,.55)); }
+    @keyframes bootLogo { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .82; transform: scale(.985); } }
+    #boot .tag { margin-top: 8px; color: #8896ab; font-size: 15px; }
+    #boot .bar-row { margin-top: 36px; display: flex; align-items: center; gap: 14px; }
+    #boot .bar { width: 260px; height: 6px; border-radius: 999px; background: rgba(136,150,171,.18); overflow: hidden; }
+    #boot .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #4c9aff, #22d3ee); border-radius: 999px; animation: bootFill 2s cubic-bezier(.4,0,.2,1) forwards; box-shadow: 0 0 12px rgba(34,211,238,.6); }
+    @keyframes bootFill { to { width: 100%; } }
+    #boot .pct, #boot .status { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #8896ab; }
+    #boot .pct { width: 44px; }
+    #boot .status { margin-top: 14px; color: #556477; min-height: 18px; }
+    #root { opacity: 0; transition: opacity .6s cubic-bezier(.16,1,.3,1); }
+    #root.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="boot">
+    <div class="logo">
+      <svg width="42" height="42" viewBox="0 0 24 24" fill="#22d3ee"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+      EnergiQ
+    </div>
+    <div class="tag">Smart Energy Intelligence</div>
+    <div class="bar-row"><div class="bar"><i></i></div><div class="pct" id="boot-pct">0%</div></div>
+    <div class="status" id="boot-status">Initializing zones...</div>
+  </div>
+  <div id="root"></div>
+
+  <script>
+    (function () {
+      var start = performance.now(), booted = false;
+      var pctEl = document.getElementById('boot-pct'), stEl = document.getElementById('boot-status');
+      var steps = [[0, 'Initializing zones...'], [30, 'Generating 7-day data...'], [60, 'Training prediction model...'], [90, 'Ready.']];
+      function tick() {
+        if (booted) return;
+        var p = Math.min(100, Math.round((performance.now() - start) / 20));
+        pctEl.textContent = p + '%';
+        for (var i = steps.length - 1; i >= 0; i--) if (p >= steps[i][0]) { stEl.textContent = steps[i][1]; break; }
+        if (p < 100) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+      // Called by src/main.jsx once React has mounted; holds the loader for at least 2 s.
+      window.__finishBoot = function () {
+        if (booted) return;
+        setTimeout(function () {
+          booted = true; pctEl.textContent = '100%'; stEl.textContent = 'Ready.';
+          setTimeout(function () {
+            document.getElementById('boot').classList.add('hide');
+            document.getElementById('root').classList.add('show');
+            window.__booted = true;
+            window.dispatchEvent(new Event('energiq:booted'));
+            setTimeout(function () { var b = document.getElementById('boot'); if (b) b.remove(); }, 700);
+          }, 150);
+        }, Math.max(0, 2000 - (performance.now() - start)));
+      };
+    })();
+  </script>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+</html>
