@@ -3,8 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { lsGet, lsSet } from './lib/format.js';
 import { ZONES } from './lib/campus.js';
 import { computeModel } from './lib/model.js';
+import { withLive } from './lib/live.js';
 import { buildRecs } from './lib/recommendations.js';
-import { buildReport, downloadText } from './lib/report.js';
+import { buildReport, downloadText, printHTML } from './lib/report.js';
+import ExportDialog from './components/ExportDialog.jsx';
 import { PalCtx, readPalette } from './lib/theme.js';
 import { useSimulation } from './hooks/useSimulation.js';
 import { useAlertEngine } from './hooks/useAlertEngine.js';
@@ -24,7 +26,7 @@ const TITLES = {
   savings: ['Savings Recommendations', 'Actionable schedules with measurable impact'],
   alerts: ['Alerts & Monitoring', 'Threshold breaches, idle draw and anomalies'],
 };
-const SHORTCUTS = [['1 – 5', 'Switch view'], ['Space', 'Pause / resume simulation'], ['D', 'Toggle dark / light theme'], ['F', 'Toggle fullscreen'], ['?', 'Show this panel'], ['Esc', 'Close overlays']];
+const SHORTCUTS = [['1 – 5', 'Switch view'], ['Space', 'Pause / resume live updates'], ['D', 'Toggle dark / light theme'], ['F', 'Toggle fullscreen'], ['E', 'Export report'], ['?', 'Show this panel'], ['Esc', 'Close overlays']];
 const DEFAULT_THRESHOLDS = Object.fromEntries(ZONES.map(z => [z.id, { warn: 85, crit: 95, warnOn: true, critOn: true, idleOn: z.id !== 'server' }]));
 
 export default function App() {
@@ -49,12 +51,13 @@ export default function App() {
   const [zoneSel, setZoneSel] = useState('admin');
 
   /* Simulation, model & engines */
-  const { abs, playing, setPlaying, speed, setSpeed } = useSimulation();
+  const { abs, time, playing, setPlaying } = useSimulation();
   const [thresholds, setThresholds] = useState(DEFAULT_THRESHOLDS);
   const [customRules, setCustomRules] = useState([]);
-  const { alerts, acknowledge } = useAlertEngine(abs, thresholds, customRules);
-  const model = useMemo(() => computeModel(abs), [abs]);
-  const recs = useMemo(() => buildRecs(model), [model]);
+  const baseModel = useMemo(() => computeModel(abs), [abs]);
+  const model = useMemo(() => withLive(baseModel, time.getTime()), [baseModel, time]);
+  const { alerts, acknowledge } = useAlertEngine(model, thresholds, customRules);
+  const recs = useMemo(() => buildRecs(baseModel), [baseModel]);
   const [applied, setApplied] = useState(['lighting-motion', 'server-cooling']);
   const [handled, setHandled] = useState([]);
 
@@ -75,8 +78,17 @@ export default function App() {
     prevCount.current = activeCount;
   }, [activeCount]);
 
+  /* Pop a toast the moment the live check raises a new alert */
+  const lastSeen = useRef(alerts[0]?.id ?? 0);
+  useEffect(() => {
+    const fresh = alerts.filter(a => a.id > lastSeen.current && a.live && a.sev !== 'info');
+    if (alerts.length) lastSeen.current = Math.max(lastSeen.current, alerts[0].id);
+    fresh.slice(0, 2).forEach(a => toast(`${a.zone}: ${a.title}`, a.sev === 'critical' ? 'red' : 'amber'));
+  }, [alerts, toast]);
+
   /* Boot screen hand-off + first-visit tour */
   const [showKeys, setShowKeys] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [tourStep, setTourStep] = useState(null);
   useEffect(() => {
     window.__finishBoot?.();
@@ -87,10 +99,11 @@ export default function App() {
   const endTour = useCallback(() => { setTourStep(null); lsSet('energiq-tour-done', '1'); window.scrollTo({ top: 0, behavior: 'smooth' }); }, []);
 
   /* Actions */
-  const doExport = useCallback(() => {
-    const { text, name } = buildReport(model, alerts, recs, applied);
-    downloadText(text, name);
-    toast(`Report exported — ${name}`);
+  const doExport = useCallback(opts => {
+    const { text, name, type, format } = buildReport(model, alerts, recs, applied, opts);
+    if (format === 'pdf') { printHTML(text); toast('Report ready — choose "Save as PDF" in the print dialog'); }
+    else { downloadText(text, name, type); toast(`Report exported — ${name}`); }
+    setShowExport(false);
   }, [model, alerts, recs, applied, toast]);
 
   const toggleFull = useCallback(() => {
@@ -109,12 +122,13 @@ export default function App() {
     const onKey = e => {
       const tag = (e.target.tagName || '').toLowerCase();
       if (['input', 'select', 'textarea'].includes(tag) || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'Escape') { setShowKeys(false); if (tourStep !== null) endTour(); return; }
+      if (e.key === 'Escape') { setShowKeys(false); setShowExport(false); if (tourStep !== null) endTour(); return; }
       if (tourStep !== null) return;
       if (e.key >= '1' && e.key <= '5') setView(NAV[+e.key - 1].id);
       else if (e.key === ' ') { e.preventDefault(); setPlaying(p => !p); }
       else if (e.key === 'd' || e.key === 'D') toggleTheme();
       else if (e.key === 'f' || e.key === 'F') toggleFull();
+      else if (e.key === 'e' || e.key === 'E') setShowExport(true);
       else if (e.key === '?') setShowKeys(s => !s);
     };
     window.addEventListener('keydown', onKey);
@@ -125,14 +139,14 @@ export default function App() {
   if (view === 'overview') content = <Overview model={model} alerts={alerts} recs={recs} applied={applied} thresholds={thresholds} onZone={openZone} onGoto={setView} />;
   else if (view === 'zones') content = <Zones model={model} zoneSel={zoneSel} setZoneSel={setZoneSel} thresholds={thresholds} />;
   else if (view === 'forecast') content = <Forecast model={model} thresholds={thresholds} handled={handled} onHandle={handlePeak} />;
-  else if (view === 'savings') content = <Savings recs={recs} applied={applied} onApply={applyRec} onUndo={undoRec} />;
-  else content = <Alerts alerts={alerts} abs={abs} onAck={ack} thresholds={thresholds} setThresholds={setThresholds} customRules={customRules} setCustomRules={setCustomRules} toast={toast} />;
+  else if (view === 'savings') content = <Savings model={model} recs={recs} applied={applied} onApply={applyRec} onUndo={undoRec} />;
+  else content = <Alerts alerts={alerts} model={model} onAck={ack} thresholds={thresholds} setThresholds={setThresholds} customRules={customRules} setCustomRules={setCustomRules} toast={toast} />;
 
   return (
     <PalCtx.Provider value={pal}>
-      <TopBar abs={abs} playing={playing} onPlay={() => setPlaying(p => !p)} speed={speed} setSpeed={setSpeed} theme={theme} onTheme={toggleTheme} model={model}
-        alertCount={activeCount} bellKey={bellKey} onBell={() => setView('alerts')} onExport={doExport} onHelp={() => setShowKeys(true)} />
-      <Sidebar view={view} setView={setView} alertCount={activeCount} acc={model.acc} />
+      <TopBar abs={abs} time={time} playing={playing} onPlay={() => setPlaying(p => !p)} theme={theme} onTheme={toggleTheme} model={model}
+        alertCount={activeCount} bellKey={bellKey} onBell={() => setView('alerts')} onExport={() => setShowExport(true)} onHelp={() => setShowKeys(true)} />
+      <Sidebar view={view} setView={setView} alertCount={activeCount} acc={model.acc} nextReadingSec={model.nextReadingSec} />
       <BottomNav view={view} setView={setView} alertCount={activeCount} />
 
       <main className="main">
@@ -149,10 +163,15 @@ export default function App() {
             {content}
           </motion.div>
         </div>
-        <footer className="mt-10 pt-5 border-t border-line-subtle text-center text-xs text-ink-3">Built for TeachPulse Hackathon 2026 • EnergiQ by VoidVault • VIT Chennai</footer>
+        <footer className="mt-10 pt-5 border-t border-line-subtle text-center text-xs text-ink-3">Built for TeachPulse Hackathon 2026 • EnergiQ by Void • VIT Chennai</footer>
       </main>
 
       <AnimatePresence>
+        {showExport && (
+          <Modal key="export" wide title="Export report" onClose={() => setShowExport(false)}>
+            <ExportDialog model={model} alerts={alerts} recs={recs} applied={applied} onExport={doExport} />
+          </Modal>
+        )}
         {showKeys && (
           <Modal key="keys" title="Keyboard shortcuts" onClose={() => setShowKeys(false)}>
             <div className="flex flex-col gap-2.5 text-sm">

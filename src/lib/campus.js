@@ -24,7 +24,17 @@ export const RATE = 8.5, OFFPEAK_RATE = 5.2, DEMAND_CHARGE = 200;
 /* Time — 7 days × 96 fifteen-minute intervals, Mon 21 Sep 2026 → Sun 27 Sep 2026.
    The absolute tick index keeps advancing; the dataset loops weekly. */
 export const PER_DAY = 96, DAYS = 7, TOTAL = PER_DAY * DAYS;
-export const START_IDX = 3 * PER_DAY + 36; // Thursday 09:00 — gives 3 days of history at launch
+export const START_IDX = 3 * PER_DAY + 36; // Thursday 09:00 — fixed reference point for tests
+const EPOCH = Date.UTC(2026, 8, 21), IST_OFFSET = 5.5 * 3600e3, SLOT_MS = 15 * 60e3;
+/** Absolute interval index for a real timestamp (IST), counted from Mon 21 Sep 2026 00:00 IST. */
+export const nowIdx = (ms = Date.now()) => Math.floor((ms + IST_OFFSET - EPOCH) / SLOT_MS);
+/** Real timestamp (ms) at which interval `k` starts. */
+export const slotStartMs = k => EPOCH - IST_OFFSET + k * SLOT_MS;
+const clockFmt = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+/** "HH:MM:SS" in IST for a real timestamp. */
+export const clockOf = ms => clockFmt.format(ms);
+/** How far through the current 15-minute interval `ms` is, in [0, 1). */
+export const slotFrac = (ms = Date.now()) => { const r = (ms + IST_OFFSET - EPOCH) % SLOT_MS; return (r < 0 ? r + SLOT_MS : r) / SLOT_MS; };
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export const WEEKDAYS_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

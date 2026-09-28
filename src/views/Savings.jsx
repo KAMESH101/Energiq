@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { fkW, fINR, fPct, n0 } from '../lib/format.js';
-import { RATE, MONTHS, MONTHS_LONG } from '../lib/campus.js';
+import { fkW, fINR, fINR2, fPct, n0 } from '../lib/format.js';
+import { RATE, PER_DAY, MONTHS, MONTHS_LONG } from '../lib/campus.js';
 import { WEEK_KWH } from '../lib/data.js';
 import { usePal, axisTick } from '../lib/theme.js';
 import { Icon, CountUp, Seg, Badge, Legend2, TipRow, stagger, rise } from '../components/ui.jsx';
@@ -11,13 +11,14 @@ const SEASON = [0.86, 0.9, 1.02, 1.15, 1.22, 1.12, 1.0, 0.98, 1.0, 0.97, 0.9, 0.
 const DIM = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const IMPACT_TONE = { high: 'red', medium: 'amber', low: 'green' };
 
-export default function Savings({ recs, applied, onApply, onUndo }) {
+export default function Savings({ model, recs, applied, onApply, onUndo }) {
   const pal = usePal();
   const [scope, setScope] = useState('all');
   const potential = recs.reduce((s, r) => s + r.inrMonth, 0);
   const appliedRecs = recs.filter(r => applied.includes(r.id));
   const appliedMonth = appliedRecs.reduce((s, r) => s + r.inrMonth, 0);
   const realised = potential ? appliedMonth / potential * 100 : 0;
+  const savedToday = appliedRecs.reduce((s, r) => s + r.inrDay, 0) * model.liveX / PER_DAY;
 
   const monthly = useMemo(() => {
     const sav = scope === 'all' ? potential : appliedMonth;
@@ -53,6 +54,7 @@ export default function Savings({ recs, applied, onApply, onUndo }) {
         <div className="h-10 w-px bg-line-subtle hidden sm:block" />
         <div><div className="text-xs text-ink-2">Applied</div><div className="mono text-xl font-semibold">{appliedRecs.length}</div></div>
         <div><div className="text-xs text-ink-2">Open</div><div className="mono text-xl font-semibold">{recs.length - appliedRecs.length}</div></div>
+        <div><div className="text-xs text-ink-2 flex items-center gap-1.5"><span className="live-dot" style={{ width: 6, height: 6 }} />Saved today</div><div className="mono text-xl font-semibold" style={{ color: pal.green }}><CountUp value={savedToday} format={fINR2} /></div></div>
         <div><div className="text-xs text-ink-2">Locked-in / month</div><div className="mono text-xl font-semibold" style={{ color: pal.green }}><CountUp value={appliedMonth} format={fINR} /></div></div>
         <div className="flex-1" />
         <div className="w-full sm:w-56">

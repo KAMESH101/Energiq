@@ -1,5 +1,5 @@
 import { fkW, fPct, fINR, n1, pad, fmtDur } from './format.js';
-import { ZONES, CATS, TOTAL, RATE, hhmm, hoursLabel } from './campus.js';
+import { ZONES, CATS, TOTAL, RATE, hhmm, hoursLabel, slotStartMs } from './campus.js';
 import { L, A, isIdle } from './data.js';
 import { predictShort, hybridForecast } from './forecast.js';
 
@@ -29,10 +29,10 @@ export function nextLevel(lvl, pct, th) {
   return 'normal';
 }
 
-/** Replays the week against a rule set: how often (and how long) it would have alerted. */
-export function countTriggers(z, th) {
+/** Replays the 7 days ending at interval `end` against a rule set: how often (and how long) it would have alerted. */
+export function countTriggers(z, th, end = TOTAL - 1) {
   let lvl = 'normal', warn = 0, crit = 0, idle = 0, inIdle = false, alertSlots = 0;
-  for (let k = 0; k < TOTAL; k++) {
+  for (let k = end - TOTAL + 1; k <= end; k++) {
     const nl = nextLevel(lvl, smoothPct(z, k), th);
     if (nl !== lvl) { if (nl === 'crit') crit++; else if (nl === 'warn' && lvl === 'normal') warn++; lvl = nl; }
     const id = th.idleOn && isIdle(z, k);
@@ -45,37 +45,55 @@ export function countTriggers(z, th) {
 
 export function createEngine() { return { alerts: [], ctx: {}, seq: 0, lastAbs: -Infinity }; }
 
+const pusher = (E, abs, at, live) => a => {
+  const al = { id: ++E.seq, abs, at, live, status: a.sev === 'info' ? 'cleared' : 'active', ...a };
+  E.alerts.unshift(al);
+  if (E.alerts.length > 200) E.alerts.length = 200;
+  return al;
+};
+const clear = al => { if (al && al.status === 'active') al.status = 'cleared'; };
+const zoneCtx = (E, z) => E.ctx[z.id] || (E.ctx[z.id] = { level: 'normal', idleRun: 0, idleWaste: 0, idleAlert: null, loadAlert: null, fcAlert: null, fcTarget: 0, anom: false, custom: {} });
+
+/** Capacity threshold transitions (shared by the interval step and the live check, so neither duplicates the other). */
+function checkLevel(c, z, th, pct, v, abs, push) {
+  const vs = pct * z.peakLoad / 100, base = { zoneId: z.id, zone: z.name };
+  const lvl = nextLevel(c.level, pct, th);
+  if (lvl !== c.level) {
+    if (lvl === 'crit') {
+      clear(c.loadAlert); clear(c.fcAlert); c.fcAlert = null;
+      c.loadAlert = push({ ...base, sev: 'critical', type: 'load', title: `Load exceeded ${th.crit}% capacity`, detail: `${z.name} is drawing ${fkW(vs)} (running average) — ${fPct(pct)} of its ${z.peakLoad} kW rated capacity. Sustained operation above ${th.crit}% risks breaker trips and maximum-demand penalties.`, action: SPIKE_ACTION[z.id](abs) });
+    } else if (lvl === 'warn' && c.level === 'normal') {
+      clear(c.fcAlert); c.fcAlert = null;
+      c.loadAlert = push({ ...base, sev: 'warning', type: 'load', title: `Load above ${th.warn}% threshold`, detail: `${z.name} reached ${fkW(vs)} (${fPct(pct)} of capacity). HVAC and ${equipGuess(z).short} are the largest contributors at this hour.`, action: SPIKE_ACTION[z.id](abs) });
+    } else if (lvl === 'normal') {
+      clear(c.loadAlert); c.loadAlert = null;
+      push({ ...base, sev: 'info', type: 'recovery', title: 'Returned to normal range', detail: `Load eased to ${fkW(v)} (${fPct(v / z.peakLoad * 100)} of capacity).`, action: 'No action needed — continue monitoring.' });
+    }
+    c.level = lvl;
+  }
+}
+
+/** Custom kW rules (shared by the interval step and the live check). */
+function checkCustom(c, z, v, rules, push) {
+  rules.filter(r => r.zoneId === z.id).forEach(r => {
+    const over = v > r.kw;
+    if (over && !c.custom[r.id]) c.custom[r.id] = push({ zoneId: z.id, zone: z.name, sev: r.severity, type: 'custom', title: `Custom rule: load > ${r.kw} kW`, detail: `${z.name} drew ${fkW(v)}, exceeding your custom limit of ${r.kw} kW.`, action: 'Review the zone schedule against your custom limit.' });
+    else if (!over && c.custom[r.id]) { clear(c.custom[r.id]); delete c.custom[r.id]; }
+  });
+}
+
 /** Advances the alert engine by one interval. Mutates E; cfg = { thresholds, customRules }. */
 export function engineStep(E, abs, cfg) {
-  const push = a => {
-    const al = { id: ++E.seq, abs, status: a.sev === 'info' ? 'cleared' : 'active', ...a };
-    E.alerts.unshift(al);
-    if (E.alerts.length > 200) E.alerts.length = 200;
-    return al;
-  };
-  const clear = al => { if (al && al.status === 'active') al.status = 'cleared'; };
+  const push = pusher(E, abs, slotStartMs(abs), false);
 
   ZONES.forEach(z => {
-    const c = E.ctx[z.id] || (E.ctx[z.id] = { level: 'normal', idleRun: 0, idleWaste: 0, idleAlert: null, loadAlert: null, fcAlert: null, fcTarget: 0, anom: false, custom: {} });
+    const c = zoneCtx(E, z);
     const th = cfg.thresholds[z.id];
-    const v = L(z.id, abs), pct = smoothPct(z, abs), vs = pct * z.peakLoad / 100;
+    const v = L(z.id, abs), pct = smoothPct(z, abs);
     const base = { zoneId: z.id, zone: z.name };
 
     // 1. Capacity thresholds
-    const lvl = nextLevel(c.level, pct, th);
-    if (lvl !== c.level) {
-      if (lvl === 'crit') {
-        clear(c.loadAlert); clear(c.fcAlert); c.fcAlert = null;
-        c.loadAlert = push({ ...base, sev: 'critical', type: 'load', title: `Load exceeded ${th.crit}% capacity`, detail: `${z.name} is drawing ${fkW(vs)} (30-min average) — ${fPct(pct)} of its ${z.peakLoad} kW rated capacity. Sustained operation above ${th.crit}% risks breaker trips and maximum-demand penalties.`, action: SPIKE_ACTION[z.id](abs) });
-      } else if (lvl === 'warn' && c.level === 'normal') {
-        clear(c.fcAlert); c.fcAlert = null;
-        c.loadAlert = push({ ...base, sev: 'warning', type: 'load', title: `Load above ${th.warn}% threshold`, detail: `${z.name} reached ${fkW(vs)} (${fPct(pct)} of capacity). HVAC and ${equipGuess(z).short} are the largest contributors at this hour.`, action: SPIKE_ACTION[z.id](abs) });
-      } else if (lvl === 'normal') {
-        clear(c.loadAlert); c.loadAlert = null;
-        push({ ...base, sev: 'info', type: 'recovery', title: 'Returned to normal range', detail: `Load eased to ${fkW(v)} (${fPct(v / z.peakLoad * 100)} of capacity).`, action: 'No action needed — continue monitoring.' });
-      }
-      c.level = lvl;
-    }
+    checkLevel(c, z, th, pct, v, abs, push);
 
     // 2. Idle draw outside operating hours
     const idle = th.idleOn && isIdle(z, abs);
@@ -113,11 +131,27 @@ export function engineStep(E, abs, cfg) {
     }
 
     // 5. Custom rules
-    cfg.customRules.filter(r => r.zoneId === z.id).forEach(r => {
-      const over = v > r.kw;
-      if (over && !c.custom[r.id]) c.custom[r.id] = push({ ...base, sev: r.severity, type: 'custom', title: `Custom rule: load > ${r.kw} kW`, detail: `${z.name} drew ${fkW(v)}, exceeding your custom limit of ${r.kw} kW.`, action: 'Review the zone schedule against your custom limit.' });
-      else if (!over && c.custom[r.id]) { clear(c.custom[r.id]); delete c.custom[r.id]; }
-    });
+    checkCustom(c, z, v, cfg.customRules, push);
+  });
+}
+
+/**
+ * Live check between interval steps, run every second on the live model (see lib/live.js): capacity
+ * thresholds on the running 15-min average, custom rules on the instantaneous reading, and a ticking
+ * duration on open idle-draw alerts. Alerts raised here carry the exact second they fired (`at`).
+ */
+export function engineLive(E, m, cfg) {
+  const push = pusher(E, m.abs, m.nowMs, true);
+  m.zones.forEach(z => {
+    const c = E.ctx[z.id];
+    if (!c) return;
+    const pct = (L(z.id, m.abs) + z.cur) / 2 / z.peakLoad * 100;
+    checkLevel(c, z, cfg.thresholds[z.id], pct, z.cur, m.abs, push);
+    checkCustom(c, z, z.cur, cfg.customRules, push);
+    if (c.idleAlert && c.idleRun > 0) {
+      const mins = (m.nowMs - slotStartMs(m.abs - c.idleRun + 1)) / 60000;
+      c.idleAlert.title = `Idle draw: ${equipGuess(z).short} on for ${fmtDur(mins)}`;
+    }
   });
 }
 

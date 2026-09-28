@@ -5,7 +5,7 @@ import { usePal } from '../lib/theme.js';
 import { Icon } from './ui.jsx';
 
 const TOUR = [
-  { sel: '[data-tour="kpis"]', title: 'Track your campus energy in real-time', body: 'Live load, today\'s consumption, the predicted peak and money saved — updated every 15 simulated minutes.' },
+  { sel: '[data-tour="kpis"]', title: 'Track your campus energy in real-time', body: 'Live load, today\'s consumption, the predicted peak and money saved — updated live every 15 minutes.' },
   { sel: '[data-tour="chart"]', title: 'AI predictions show you what\'s coming', body: 'The dashed purple line is the forecast; the shaded band is its confidence interval, widening as it looks further ahead.' },
   { sel: '[data-tour="nav-savings"]', title: 'Get actionable recommendations to cut waste', body: 'Zone-specific schedules with rupee impact. Apply them with one click.' },
 ];
@@ -68,12 +68,12 @@ export function Tour({ step, onNext, onSkip }) {
 }
 export const TOUR_STEPS = TOUR.length;
 
-export function Modal({ onClose, children, title }) {
+export function Modal({ onClose, children, title, wide }) {
   return (
     <motion.div className="fixed inset-0 z-[80] flex items-center justify-center p-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <div className="absolute inset-0" style={{ background: 'rgba(2,6,14,0.55)', backdropFilter: 'blur(4px)' }} onClick={onClose} />
       <motion.div initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96 }} transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="relative w-full max-w-sm rounded-xl p-6" style={{ background: 'var(--surface-2)', border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-pop)' }}>
+        className={`relative w-full ${wide ? 'max-w-xl max-h-[calc(100vh-32px)] overflow-y-auto scroll-thin' : 'max-w-sm'} rounded-xl p-6`} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-strong)', boxShadow: 'var(--shadow-pop)' }}>
         <div className="flex items-center justify-between mb-4">
           <div className="font-semibold">{title}</div>
           <button className="text-ink-3 hover:text-ink-1" onClick={onClose} aria-label="Close"><Icon name="X" size={16} /></button>
@@ -93,7 +93,7 @@ export function Toasts({ toasts }) {
           <motion.div key={t.id} layout initial={{ opacity: 0, x: 40, scale: 0.96 }} animate={{ opacity: 1, x: 0, scale: 1 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             className="flex items-center gap-3 rounded-lg px-4 py-3 text-sm pointer-events-auto border border-line-strong"
             style={{ background: 'var(--surface-2)', boxShadow: 'var(--shadow-pop)', borderLeftWidth: 3, borderLeftColor: pal[t.tone] || pal.green }}>
-            <Icon name={t.tone === 'red' ? 'CircleAlert' : t.tone === 'blue' ? 'Info' : 'CircleCheck'} size={16} style={{ color: pal[t.tone] || pal.green }} />
+            <Icon name={t.tone === 'red' ? 'CircleAlert' : t.tone === 'amber' ? 'TriangleAlert' : t.tone === 'blue' ? 'Info' : 'CircleCheck'} size={16} style={{ color: pal[t.tone] || pal.green }} />
             <span>{t.msg}</span>
           </motion.div>
         ))}

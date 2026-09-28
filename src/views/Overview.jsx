@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, BarChart, Bar, Cell, LabelList } from 'recharts';
-import { fkW, fkWh, fINR, fPct, n0 } from '../lib/format.js';
-import { ZONES, ZMAP, CATS, CAPACITY, PER_DAY, hhmm, dateOf } from '../lib/campus.js';
+import { fkW, fkWh2, fINR, fINR2, fPct, n0, fmtAgo, fmtDur } from '../lib/format.js';
+import { ZONES, ZMAP, CATS, CAPACITY, PER_DAY, hhmm, dateOf, clockOf } from '../lib/campus.js';
 import { L, TOT, ANY_ANOM } from '../lib/data.js';
 import { oneStepTotal } from '../lib/forecast.js';
+import { secsUntil } from '../lib/live.js';
 import { usePal, sevColor, loadColor, axisTick } from '../lib/theme.js';
 import { Icon, CountUp, SevDot, EmptyState, Legend2, TipRow, useMountAnim, stagger, rise } from '../components/ui.jsx';
 
@@ -28,7 +29,8 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
   const campusThr = ZONES.reduce((s, z) => s + z.peakLoad * thresholds[z.id].warn / 100, 0);
   const appliedRecs = recs.filter(r => applied.includes(r.id));
   const savedRunRate = appliedRecs.reduce((s, r) => s + r.inrDay, 0);
-  const savedToday = savedRunRate * (model.slot + 1) / PER_DAY;
+  const savedToday = savedRunRate * model.liveX / PER_DAY;
+  const peakIn = secsUntil(model, model.predPeakAt);
   const trendUp = model.trendPct >= 0;
   const feed = alerts.slice(0, 30);
 
@@ -47,7 +49,14 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
       });
     }
     return rows;
-  }, [model]);
+  }, [model.abs]); // eslint-disable-line react-hooks/exhaustive-deps -- interval data changes once per reading
+
+  // Live point: the actual line reaches the current second and the forecast continues from it.
+  const liveChart = useMemo(() => {
+    const rows = chart.map(r => (r.x === model.slot ? { ...r, pred: null, band: null } : r));
+    rows.splice(model.slot + 1, 0, { x: model.liveX, actual: model.cur, pred: model.cur, band: [model.cur, model.cur], bt: null, anom: null, zones: model.zones.map(z => z.cur), live: true });
+    return rows;
+  }, [chart, model]);
 
   const ranking = useMemo(
     () => model.zones.map(z => ({ id: z.id, name: z.short, total: z.cur, ...z.catKw })).sort((a, b) => b.total - a.total),
@@ -60,7 +69,7 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
     const delta = a != null && p != null && a > 0 ? (p - a) / a * 100 : null;
     return (
       <div className="chart-tip">
-        <div className="font-semibold mb-1 mono">{hhmm(r.x)} IST {isFut && <span style={{ color: pal.purple }} className="text-[10px] ml-1">FORECAST</span>}</div>
+        <div className="font-semibold mb-1 mono">{r.live ? <>Now <span style={{ color: pal.cyan }} className="text-[10px] ml-1">LIVE</span></> : <>{hhmm(r.x)} IST</>} {isFut && <span style={{ color: pal.purple }} className="text-[10px] ml-1">FORECAST</span>}</div>
         {a != null && <TipRow color={pal.blue} label="Actual" value={fkW(a)} />}
         {p != null && <TipRow color={pal.purple} label="Predicted" value={fkW(p)} />}
         {delta != null && <TipRow label="Δ error" value={`${delta > 0 ? '+' : ''}${fPct(delta)}`} valueStyle={{ color: Math.abs(delta) < 3 ? pal.green : Math.abs(delta) < 8 ? pal.amber : pal.red }} />}
@@ -92,21 +101,21 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
       <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4" data-tour="kpis">
         <KpiCard icon="Activity" label="Total Consumption Today" subColor={trendUp ? pal.red : pal.green}
           sub={<><Icon name={trendUp ? 'TrendingUp' : 'TrendingDown'} size={13} />{trendUp ? '▲' : '▼'} {fPct(Math.abs(model.trendPct))} vs yesterday (same time)</>}>
-          <CountUp value={model.kwhToday} format={fkWh} />
+          <CountUp value={model.kwhToday} format={fkWh2} />
         </KpiCard>
         <KpiCard icon="Gauge" label="Current Load" accent={loadColor(pal, model.pct)}
           sub={<><span className="live-dot" style={{ width: 6, height: 6 }} />{fPct(model.pct)} of {CAPACITY} kW campus capacity</>}>
           <span style={{ color: loadColor(pal, model.pct) }}><CountUp value={model.cur} format={fkW} /></span>
         </KpiCard>
         <KpiCard icon="Sparkles" label="Predicted Peak (6h)" accent={pal.purple} subColor={pal.purple}
-          sub={<><Icon name="Clock" size={13} />expected at {hhmm(model.predPeakAt)} IST · {fPct(model.predPeak / CAPACITY * 100)} cap.</>}>
+          sub={<><Icon name="Clock" size={13} />expected at {hhmm(model.predPeakAt)} IST{peakIn > 0 ? ` · in ${fmtDur(peakIn / 60)}` : ''} · {fPct(model.predPeak / CAPACITY * 100)} cap.</>}>
           <span style={{ color: pal.purple }}><CountUp value={model.predPeak} format={fkW} /></span>
         </KpiCard>
         <KpiCard icon="IndianRupee" label="Cost Saved Today" accent={pal.green} subColor={pal.green}
           sub={appliedRecs.length
             ? <>{appliedRecs.length} of {recs.length} applied · {fINR(savedRunRate)}/day run-rate</>
             : <button className="underline" onClick={() => onGoto('savings')}>Apply a recommendation to start saving →</button>}>
-          <span style={{ color: pal.green }}><CountUp value={savedToday} format={fINR} /></span>
+          <span style={{ color: pal.green }}><CountUp value={savedToday} format={fINR2} /></span>
         </KpiCard>
       </motion.div>
 
@@ -120,7 +129,7 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
         </div>
         <div style={{ height: 360 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chart} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
+            <ComposedChart data={liveChart} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="gOvActual" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={pal.blue} stopOpacity={0.3} /><stop offset="100%" stopColor={pal.blue} stopOpacity={0} /></linearGradient>
               </defs>
@@ -133,7 +142,7 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
               <Line dataKey="pred" stroke={pal.purple} strokeWidth={2} strokeDasharray="8 4" dot={false} isAnimationActive={anim} animationDuration={800} activeDot={{ r: 4, fill: pal.purple }} />
               <Line dataKey="anom" stroke="none" isAnimationActive={false} dot={{ r: 3.5, fill: pal.red, stroke: pal.red, strokeWidth: 1 }} activeDot={{ r: 5, fill: pal.red }} legendType="none" />
               <ReferenceLine y={campusThr} stroke={pal.amber} strokeDasharray="6 4" label={{ value: 'Peak Threshold', position: 'insideTopLeft', fill: pal.amber, fontSize: 11 }} />
-              <ReferenceLine x={model.slot} stroke={pal.cyan} strokeDasharray="4 3" label={{ value: 'Now', position: 'top', fill: pal.cyan, fontSize: 11, fontWeight: 600 }} />
+              <ReferenceLine x={model.liveX} stroke={pal.cyan} strokeDasharray="4 3" label={{ value: 'Now', position: 'top', fill: pal.cyan, fontSize: 11, fontWeight: 600 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -182,8 +191,10 @@ export default function Overview({ model, alerts, recs, applied, thresholds, onZ
                       <span className="mt-1.5"><SevDot sev={a.sev} /></span>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 text-sm">
-                          <span className="mono text-xs text-ink-3">{hhmm(a.abs)}</span>
+                          <span className="mono text-xs text-ink-3">{a.live ? clockOf(a.at) : hhmm(a.abs)}</span>
                           <span className="font-medium text-ink-1 truncate">{a.zone}</span>
+                          <span className="text-[11px] text-ink-3 whitespace-nowrap">{fmtAgo((model.nowMs - a.at) / 1000)}</span>
+                          {a.live && <span className="text-[9px] font-bold px-1 rounded" style={{ color: pal.cyan, background: `color-mix(in srgb, ${pal.cyan} 14%, transparent)` }}>LIVE</span>}
                           {a.status === 'active' && a.sev !== 'info' && <span className="ml-auto text-[10px] font-bold uppercase" style={{ color: sevColor(pal, a.sev) }}>Active</span>}
                         </div>
                         <div className="text-[13px] text-ink-2 mt-0.5">{a.title}</div>

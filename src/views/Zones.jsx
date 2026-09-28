@@ -62,7 +62,13 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
       rows.push({ x: s, actual: past ? L(z.id, k) : null, pred: past ? oneStep(z.id, k) : z.fc.pred[t - 1], anom: past && A(z.id, k) ? L(z.id, k) : null });
     }
     return rows;
-  }, [model, z]);
+  }, [model.abs, zoneSel]); // eslint-disable-line react-hooks/exhaustive-deps -- interval data changes once per reading
+
+  const liveLine = useMemo(() => {
+    const rows = line.slice();
+    rows.splice(model.slot + 1, 0, { x: model.liveX, actual: z.cur, pred: null, anom: null, live: true });
+    return rows;
+  }, [line, model, z]);
 
   const hourKey = Math.floor(model.abs / 4);
   const heat = useMemo(() => {
@@ -80,6 +86,11 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
     return cols;
   }, [hourKey, zoneSel]); // recompute hourly, not every tick
 
+  // Current-hour cell blends the finished intervals of this hour with the live reading.
+  const curHour = Math.floor(model.slot / 4), hourStart = model.dayStart + curHour * 4;
+  let hs = z.cur; for (let k = hourStart; k < model.abs; k++) hs += L(z.id, k);
+  const liveHourAvg = hs / (model.abs - hourStart + 1);
+
   let slotsAtPeak = 0;
   for (let k = model.dayStart; k <= model.abs; k++) if (L(z.id, k) >= z.peakLoad * th.warn / 100) slotsAtPeak++;
   const donut = CATS.map(c => ({ key: c.key, name: c.label, value: z.catKw[c.key], pct: z.breakdown[c.key] * 100, color: pal[c.color] }));
@@ -92,7 +103,7 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
     const r = payload[0].payload;
     return (
       <div className="chart-tip">
-        <div className="font-semibold mb-1 mono">{hhmm(r.x)} IST</div>
+        <div className="font-semibold mb-1 mono">{r.live ? <>Now <span style={{ color: pal.cyan }} className="text-[10px] ml-1">LIVE</span></> : <>{hhmm(r.x)} IST</>}</div>
         {r.actual != null && <TipRow color={pal.blue} label="Actual" value={fkW(r.actual)} />}
         {r.pred != null && <TipRow color={pal.purple} label="Predicted" value={fkW(r.pred)} />}
         {r.anom != null && <div className="text-xs mt-1" style={{ color: pal.red }}>● Anomaly: idle equipment detected</div>}
@@ -149,7 +160,7 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
             </div>
             <div style={{ height: 300 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={line} margin={{ top: 10, right: 8, left: -12, bottom: 0 }}>
+                <ComposedChart data={liveLine} margin={{ top: 10, right: 8, left: -12, bottom: 0 }}>
                   <CartesianGrid stroke={pal.grid} vertical={false} />
                   {oh1 - oh0 < 24 && <ReferenceArea x1={oh0 * 4} x2={Math.min(95, oh1 * 4)} fill={pal.t3} fillOpacity={0.07} label={{ value: 'Operating hours', position: 'insideTop', fill: pal.t3, fontSize: 10 }} />}
                   <XAxis dataKey="x" type="number" domain={[0, 95]} ticks={[0, 16, 32, 48, 64, 80]} tickFormatter={hhmm} tick={axisTick(pal)} axisLine={false} tickLine={false} />
@@ -159,7 +170,7 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
                   <Line dataKey="pred" stroke={pal.purple} strokeWidth={1.5} strokeDasharray="6 3" dot={false} isAnimationActive={anim} />
                   <Line dataKey="actual" stroke={pal.blue} strokeWidth={2} dot={false} isAnimationActive={anim} activeDot={{ r: 4 }} />
                   <Line dataKey="anom" stroke="none" dot={{ r: 4, fill: pal.red, stroke: pal.red }} isAnimationActive={false} activeDot={{ r: 5, fill: pal.red }} />
-                  <ReferenceLine x={model.slot} stroke={pal.cyan} strokeDasharray="4 3" label={{ value: 'Now', position: 'top', fill: pal.cyan, fontSize: 11 }} />
+                  <ReferenceLine x={model.liveX} stroke={pal.cyan} strokeDasharray="4 3" label={{ value: 'Now', position: 'top', fill: pal.cyan, fontSize: 11 }} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -213,13 +224,13 @@ export default function Zones({ model, zoneSel, setZoneSel, thresholds }) {
               <div className="flex flex-col gap-[2px] pt-[18px] pr-1">
                 {Array.from({ length: 24 }, (_, h) => <div key={h} className="mono text-[9px] leading-[9px] h-[9px] text-ink-3 text-right">{h % 6 === 0 ? pad(h) : ''}</div>)}
               </div>
-              {heat.map(col => (
+              {heat.map((col, ci) => (
                 <div key={col.d} className="flex-1 flex flex-col gap-[2px] min-w-0">
                   <div className="text-[10px] text-ink-3 text-center h-4 mb-[2px]">{col.label}</div>
-                  {col.cells.map((v, h) => (
+                  {col.cells.map((v0, h) => { const v = ci === heat.length - 1 && h === curHour ? liveHourAvg : v0; return (
                     <div key={h} className="heat-cell" onMouseEnter={() => setHoverCell({ day: col.long, h, v })}
-                      style={{ background: v == null ? 'transparent' : heatColor(v / z.peakLoad), border: v == null ? '1px dashed var(--border-subtle)' : 'none' }} />
-                  ))}
+                      style={{ background: v == null ? 'transparent' : heatColor(v / z.peakLoad), border: v == null ? '1px dashed var(--border-subtle)' : 'none', transition: 'background .8s' }} />
+                  ); })}
                 </div>
               ))}
             </div>

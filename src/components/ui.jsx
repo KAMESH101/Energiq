@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Activity, ArrowRightLeft, Bell, BellOff, BookOpen, Building2, CalendarClock, Check, CheckCheck, ChevronDown, ChevronUp,
-  CircleAlert, CircleCheck, Clock, CornerDownRight, Download, Gauge, GraduationCap, History, IndianRupee, Info, Keyboard,
-  LayoutDashboard, Lightbulb, Moon, Pause, Play, Plus, PowerOff, RotateCcw, Server, Sparkles, Sun, Thermometer, Trash2,
+  Activity, ArrowRightLeft, Bell, BellOff, BookOpen, Braces, Building2, CalendarClock, Check, CheckCheck, ChevronDown, ChevronUp,
+  CircleAlert, CircleCheck, Clock, CornerDownRight, Download, FileSpreadsheet, FileText, Gauge, GraduationCap, History, IndianRupee, Info, Keyboard,
+  LayoutDashboard, Lightbulb, Moon, Pause, Play, Plus, PowerOff, Printer, RotateCcw, Server, Sparkles, Sun, Thermometer, Trash2,
   TrendingDown, TrendingUp, TriangleAlert, UtensilsCrossed, Wind, Wrench, X, Zap, ZoomOut,
 } from 'lucide-react';
 import { safe } from '../lib/format.js';
@@ -11,9 +11,9 @@ import { usePal, sevColor } from '../lib/theme.js';
 
 // Explicit map (not `import *`) so the bundle only ships the icons we use.
 const ICONS = {
-  Activity, ArrowRightLeft, Bell, BellOff, BookOpen, Building2, CalendarClock, Check, CheckCheck, ChevronDown, ChevronUp,
-  CircleAlert, CircleCheck, Clock, CornerDownRight, Download, Gauge, GraduationCap, History, IndianRupee, Info, Keyboard,
-  LayoutDashboard, Lightbulb, Moon, Pause, Play, Plus, PowerOff, RotateCcw, Server, Sparkles, Sun, Thermometer, Trash2,
+  Activity, ArrowRightLeft, Bell, BellOff, BookOpen, Braces, Building2, CalendarClock, Check, CheckCheck, ChevronDown, ChevronUp,
+  CircleAlert, CircleCheck, Clock, CornerDownRight, Download, FileSpreadsheet, FileText, Gauge, GraduationCap, History, IndianRupee, Info, Keyboard,
+  LayoutDashboard, Lightbulb, Moon, Pause, Play, Plus, PowerOff, Printer, RotateCcw, Server, Sparkles, Sun, Thermometer, Trash2,
   TrendingDown, TrendingUp, TriangleAlert, UtensilsCrossed, Wind, Wrench, X, Zap, ZoomOut,
 };
 

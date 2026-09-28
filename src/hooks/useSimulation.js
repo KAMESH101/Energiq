@@ -1,21 +1,26 @@
 import { useEffect, useState } from 'react';
-import { START_IDX } from '../lib/campus.js';
+import { nowIdx } from '../lib/campus.js';
 
-/** Real-time clock: each tick advances virtual time by 15 min (1x = 2 s, 2x = 1 s, 4x = 0.5 s). */
+/** Live clock: follows the real IST wall clock; `abs` is the current 15-minute interval. Pausing freezes the dashboard. */
 export function useSimulation() {
-  const [abs, setAbs] = useState(START_IDX);
+  const [now, setNow] = useState(() => new Date());
   const [playing, setPlaying] = useState(true);
-  const [speed, setSpeed] = useState(1);
+  const [frozen, setFrozen] = useState(null);
 
   useEffect(() => {
-    if (!playing) return undefined;
-    const id = setInterval(() => setAbs(a => a + 1), 2000 / speed);
+    if (!playing) { setFrozen(f => f || new Date()); return undefined; }
+    setFrozen(null);
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
-  }, [playing, speed]);
+  }, [playing]);
+
+  const time = frozen || now;
+  const abs = nowIdx(time.getTime());
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('energiq:tick', { detail: { abs } }));
   }, [abs]);
 
-  return { abs, playing, setPlaying, speed, setSpeed };
+  return { abs, time, playing, setPlaying };
 }

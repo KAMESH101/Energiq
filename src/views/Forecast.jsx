@@ -1,10 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ResponsiveContainer, ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ReferenceArea, ScatterChart, Scatter, Cell } from 'recharts';
-import { fkW, fPct, fmtDur, n0, n1 } from '../lib/format.js';
+import { fkW, fPct, fmtDur, fmtCountdown, n0, n1 } from '../lib/format.js';
 import { ZONES, ZMAP, hhmm, slotOf, dateOf } from '../lib/campus.js';
 import { L, TOT } from '../lib/data.js';
 import { upcomingPeaks } from '../lib/alerts.js';
+import { secsUntil } from '../lib/live.js';
 import { usePal, sevColor, axisTick } from '../lib/theme.js';
 import { Icon, CountUp, EmptyState, Legend2, TipRow, useMountAnim, stagger, rise } from '../components/ui.jsx';
 
@@ -33,26 +34,34 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
       });
     }
     return rows;
-  }, [model, scope]);
+  }, [model.abs, scope]); // eslint-disable-line react-hooks/exhaustive-deps -- interval data changes once per reading
+
+  // Live point at x = fraction of the current interval elapsed; the forecast continues from it.
+  const liveData = useMemo(() => {
+    const v = scope === 'campus' ? model.cur : model.zmap[scope].cur;
+    const rows = data.map(r => (r.x === 0 ? { ...r, pred: null, band: null } : r));
+    rows.splice(97, 0, { x: model.frac, actual: v, pred: v, band: [v, v], live: true });
+    return rows;
+  }, [data, model, scope]);
 
   const redZones = useMemo(() => {
     const out = []; let st = null;
-    data.forEach(r => {
+    liveData.forEach(r => {
       const over = r.x >= 0 && r.pred != null && r.pred > thr;
       if (over && st === null) st = r.x;
       if (!over && st !== null) { out.push([st, r.x - 1]); st = null; }
     });
     if (st !== null) out.push([st, 96]);
     return out;
-  }, [data, thr]);
+  }, [liveData, thr]);
 
   const [x0, x1] = zoom || [-96, 96];
-  const shown = zoom ? data.filter(r => r.x >= x0 && r.x <= x1) : data;
+  const shown = zoom ? liveData.filter(r => r.x >= x0 && r.x <= x1) : liveData;
   const ticks = [];
   for (let x = x0; x <= x1; x++) if (slotOf(model.abs + x) % (x1 - x0 > 60 ? 16 : 4) === 0) ticks.push(x);
 
   const acc = model.acc;
-  const scatter = acc.last.map(o => ({ p: o.p, a: o.a, err: o.err, t: hhmm(o.k) }));
+  const scatter = acc.last.map(o => ({ p: o.p, a: o.a, err: o.err, t: hhmm(o.k), live: o.live }));
   const lo = Math.floor(Math.min(...scatter.map(s => Math.min(s.p, s.a))) * 0.95);
   const hi = Math.ceil(Math.max(...scatter.map(s => Math.max(s.p, s.a))) * 1.05);
   const peaks = upcomingPeaks(model, thresholds);
@@ -63,9 +72,9 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
     const r = payload[0].payload, dt = dateOf(model.abs + r.x);
     return (
       <div className="chart-tip">
-        <div className="font-semibold mb-1 mono">{dt.wd} {hhmm(model.abs + r.x)} <span className="text-ink-3 text-[10px]">{r.x > 0 ? `+${fmtDur(r.x * 15)}` : r.x < 0 ? `−${fmtDur(-r.x * 15)}` : 'now'}</span></div>
+        <div className="font-semibold mb-1 mono">{r.live ? <>Now <span style={{ color: pal.cyan }} className="text-[10px]">LIVE</span></> : <>{dt.wd} {hhmm(model.abs + r.x)} <span className="text-ink-3 text-[10px]">{r.x > 0 ? `+${fmtDur(r.x * 15)}` : r.x < 0 ? `−${fmtDur(-r.x * 15)}` : ''}</span></>}</div>
         {r.actual != null && <TipRow color={pal.blue} label="Actual" value={fkW(r.actual)} />}
-        {r.x > 0 && <>
+        {r.x > 0 && !r.live && <>
           <TipRow color={pal.purple} label="Forecast" value={fkW(r.pred)} />
           <TipRow label="Range" value={`${n1(r.band[0])}–${n1(r.band[1])}`} valueStyle={{ color: pal.t2 }} />
           {r.pred > thr && <div className="text-xs mt-1" style={{ color: pal.red }}>▲ Above threshold</div>}
@@ -79,7 +88,7 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
     const s = payload[0].payload;
     return (
       <div className="chart-tip">
-        <div className="font-semibold mono mb-1">{s.t} IST</div>
+        <div className="font-semibold mono mb-1">{s.t} IST{s.live && <span style={{ color: pal.cyan }} className="text-[10px] ml-1">LIVE · in progress</span>}</div>
         <TipRow label="Predicted" value={fkW(s.p)} />
         <TipRow label="Actual" value={fkW(s.a)} />
         <TipRow label="Error" value={fPct(s.err)} valueStyle={{ color: errColor(s.err) }} />
@@ -91,7 +100,7 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
   const onDown = e => { if (e?.activeLabel != null) { dragging.current = true; setSel([e.activeLabel, e.activeLabel]); } };
   const onMove = e => { if (dragging.current && e?.activeLabel != null) setSel(s => (s ? [s[0], e.activeLabel] : s)); };
   const onUp = () => {
-    if (dragging.current && sel) { const a = Math.min(...sel), b = Math.max(...sel); if (b - a >= 4) setZoom([a, b]); }
+    if (dragging.current && sel) { const a = Math.floor(Math.min(...sel)), b = Math.ceil(Math.max(...sel)); if (b - a >= 4) setZoom([a, b]); }
     dragging.current = false; setSel(null);
   };
 
@@ -127,7 +136,7 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
               <Area dataKey="actual" stroke={pal.blue} strokeWidth={2} fill="url(#gFcActual)" isAnimationActive={anim} animationDuration={800} dot={false} activeDot={{ r: 4 }} />
               <Line dataKey="pred" stroke={pal.purple} strokeWidth={2} strokeDasharray="8 4" dot={false} isAnimationActive={anim} animationDuration={800} activeDot={{ r: 4, fill: pal.purple }} />
               <ReferenceLine y={thr} stroke={pal.amber} strokeDasharray="6 4" label={{ value: `Threshold ${n0(thr)} kW`, position: 'insideTopLeft', fill: pal.amber, fontSize: 11 }} />
-              {x0 <= 0 && x1 >= 0 && <ReferenceLine x={0} stroke={pal.cyan} strokeWidth={1.5} label={{ value: 'NOW', position: 'top', fill: pal.cyan, fontSize: 11, fontWeight: 700 }} />}
+              {x0 <= model.frac && x1 >= model.frac && <ReferenceLine x={model.frac} stroke={pal.cyan} strokeWidth={1.5} label={{ value: 'NOW', position: 'top', fill: pal.cyan, fontSize: 11, fontWeight: 700 }} />}
               {sel && <ReferenceArea x1={Math.min(...sel)} x2={Math.max(...sel)} fill={pal.blue} fillOpacity={0.12} stroke={pal.blue} strokeOpacity={0.4} />}
             </ComposedChart>
           </ResponsiveContainer>
@@ -156,13 +165,13 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
                 <ReferenceLine segment={[{ x: lo, y: lo }, { x: hi, y: hi }]} stroke={pal.t3} strokeDasharray="4 4" ifOverflow="hidden" />
                 <Tooltip isAnimationActive={false} cursor={{ strokeDasharray: '3 3', stroke: pal.t3 }} content={<ScatterTip />} />
                 <Scatter data={scatter} isAnimationActive={anim}>
-                  {scatter.map((s, i) => <Cell key={i} fill={errColor(s.err)} fillOpacity={0.85} />)}
+                  {scatter.map((s, i) => <Cell key={i} fill={s.live ? pal.cyan : errColor(s.err)} fillOpacity={0.85} stroke={s.live ? pal.cyan : 'none'} strokeWidth={s.live ? 6 : 0} strokeOpacity={0.25} />)}
                 </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
           </div>
           <div className="flex items-center justify-between text-xs text-ink-3 mt-1">
-            <span>Last 20 predictions shown · diagonal = perfect prediction</span>
+            <span>Last 20 predictions shown · <span style={{ color: pal.cyan }}>●</span> current interval (live) · diagonal = perfect prediction</span>
             <Legend2 items={[{ label: '<3%', color: pal.green, dot: true }, { label: '3–8%', color: pal.amber, dot: true }, { label: '>8%', color: pal.red, dot: true }]} />
           </div>
         </motion.div>
@@ -181,7 +190,8 @@ export default function Forecast({ model, thresholds, handled, onHandle }) {
                       <Icon name={p.type === 'idle' ? 'PowerOff' : 'TriangleAlert'} size={16} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-x-2 text-sm"><span className="mono font-semibold">{hhmm(p.at)}</span><span className="text-ink-3">—</span><span className="font-medium">{p.zone.name}</span></div>
+                      <div className="flex flex-wrap items-center gap-x-2 text-sm"><span className="mono font-semibold">{hhmm(p.at)}</span><span className="text-ink-3">—</span><span className="font-medium">{p.zone.name}</span>
+                        {!done && secsUntil(model, p.at) > 0 && <span className="ml-auto mono text-[11px] px-1.5 py-0.5 rounded" style={{ color: c, background: `color-mix(in srgb, ${c} 12%, transparent)` }}>in {fmtCountdown(secsUntil(model, p.at))}</span>}</div>
                       <div className="text-xs text-ink-2 mt-1">
                         {p.type === 'spike'
                           ? <>Predicted: <span className="mono" style={{ color: c }}>{fkW(p.kw)} ({Math.round(p.pct)}%)</span></>

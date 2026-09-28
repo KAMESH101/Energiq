@@ -1,4 +1,4 @@
-import { fPct } from '../lib/format.js';
+import { fPct, fmtCountdown } from '../lib/format.js';
 import { usePal } from '../lib/theme.js';
 import { Icon } from './ui.jsx';
 
@@ -10,7 +10,7 @@ export const NAV = [
   { id: 'alerts', label: 'Alerts', icon: 'Bell' },
 ];
 
-export function Sidebar({ view, setView, alertCount, acc }) {
+export function Sidebar({ view, setView, alertCount, acc, nextReadingSec }) {
   const pal = usePal();
   const sys = [
     ['Grid', <span className="inline-flex items-center gap-1.5" style={{ color: pal.green }}><span className="w-1.5 h-1.5 rounded-full" style={{ background: pal.green, boxShadow: `0 0 6px ${pal.green}` }} />OK</span>],
@@ -18,6 +18,7 @@ export function Sidebar({ view, setView, alertCount, acc }) {
     ['Zones', <span className="mono">6/6 online</span>],
     ['Model', <span className="mono" style={{ color: pal.purple }}>WMA-12</span>],
     ['MAPE', <span className="mono" style={{ color: acc.mape < 5 ? pal.green : pal.amber }}>{fPct(acc.mape)}</span>],
+    ['Next reading', <span className="mono" style={{ color: pal.cyan }}>{fmtCountdown(nextReadingSec)}</span>],
   ];
   return (
     <aside className="sidebar">

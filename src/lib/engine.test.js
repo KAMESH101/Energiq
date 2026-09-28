@@ -3,7 +3,9 @@ import { ZONES, ZMAP, TOTAL, PER_DAY, START_IDX, CAPACITY } from './campus.js';
 import { DATA, generateData, L } from './data.js';
 import { predictShort, computeAccuracy } from './forecast.js';
 import { computeModel } from './model.js';
-import { nextLevel, countTriggers, createEngine, engineStep, upcomingPeaks } from './alerts.js';
+import { nextLevel, countTriggers, createEngine, engineStep, engineLive, upcomingPeaks } from './alerts.js';
+import { withLive } from './live.js';
+import { slotStartMs } from './campus.js';
 import { buildRecs } from './recommendations.js';
 import { buildReport } from './report.js';
 
@@ -85,6 +87,18 @@ describe('alert engine', () => {
     engineStep(E, START_IDX, { thresholds: DEFAULT_TH, customRules: [rule] });
     expect(E.alerts.find(a => a.type === 'custom')?.sev).toBe('critical');
   });
+
+  it('live check fires between readings, once, stamped with the exact second', () => {
+    const E = createEngine(), cfg = { thresholds: DEFAULT_TH, customRules: [] };
+    engineStep(E, START_IDX, cfg);
+    const lm = withLive(computeModel(START_IDX), slotStartMs(START_IDX) + 7 * 60e3 + 12e3);
+    cfg.customRules = [{ id: 'r2', zoneId: 'admin', kw: lm.zmap.admin.cur - 0.5, severity: 'warning' }];
+    engineLive(E, lm, cfg); engineLive(E, lm, cfg);
+    const hits = E.alerts.filter(a => a.type === 'custom');
+    expect(hits.length).toBe(1);
+    expect(hits[0].live).toBe(true);
+    expect(hits[0].at).toBe(lm.nowMs);
+  });
 });
 
 describe('model, recommendations & report', () => {
@@ -114,5 +128,17 @@ describe('model, recommendations & report', () => {
     expect(name).toBe('energiq-report-2026-09-24.md');
     expect(text).toContain('# EnergiQ Daily Energy Report');
     expect(text).toContain('Prediction Accuracy (MAPE)');
+  });
+
+  it('exports CSV and JSON with the chosen period, sections and zones', () => {
+    const opts = { period: '24h', zones: ['admin', 'server'], sections: { forecast: true, intervals: true } };
+    const csv = buildReport(m, [], buildRecs(m), [], { ...opts, format: 'csv' });
+    expect(csv.name).toBe('energiq-report-2026-09-24-24h.csv');
+    expect(csv.text).toContain('15-min readings (kW)');
+    expect(csv.text).toContain('Time,Admin Block,Server Room,Total');
+    const json = JSON.parse(buildReport(m, [], buildRecs(m), [], { ...opts, format: 'json' }).text);
+    expect(json.zones).toEqual(['admin', 'server']);
+    expect(json.intervals.length).toBe(96);
+    expect(json.forecast.length).toBe(24);
   });
 });

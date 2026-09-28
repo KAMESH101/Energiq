@@ -1,8 +1,8 @@
 import { Fragment, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, ReferenceLine, Tooltip } from 'recharts';
-import { fkW, n1 } from '../lib/format.js';
-import { ZONES, ZMAP, hhmm, dateOf } from '../lib/campus.js';
+import { fkW, n1, fmtAgo, fmtCountdown } from '../lib/format.js';
+import { ZONES, ZMAP, hhmm, dateOf, clockOf } from '../lib/campus.js';
 import { L } from '../lib/data.js';
 import { countTriggers } from '../lib/alerts.js';
 import { usePal, sevColor } from '../lib/theme.js';
@@ -10,10 +10,11 @@ import { Icon, Seg, SevDot, Toggle, EmptyState } from '../components/ui.jsx';
 
 const SEV_RANK = { critical: 3, warning: 2, info: 1 };
 
-function Sparkline({ alert, abs }) {
-  const pal = usePal(), c = sevColor(pal, alert.sev);
+function Sparkline({ alert, model }) {
+  const pal = usePal(), c = sevColor(pal, alert.sev), abs = model.abs;
   const data = [];
   for (let k = alert.abs - 8; k <= Math.min(alert.abs + 8, abs); k++) data.push({ k, v: L(alert.zoneId, k) });
+  if (alert.abs + 8 >= abs) data.push({ k: abs + model.frac, v: model.zmap[alert.zoneId].cur, live: true }); // live reading
   return (
     <div style={{ height: 70, width: '100%' }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -23,7 +24,7 @@ function Sparkline({ alert, abs }) {
           <ReferenceLine x={alert.abs} stroke={c} strokeDasharray="3 3" />
           <Line dataKey="v" stroke={c} strokeWidth={2} dot={false} isAnimationActive={false} />
           <Tooltip isAnimationActive={false} content={({ active, payload }) => (active && payload?.length
-            ? <div className="chart-tip" style={{ minWidth: 0 }}><span className="mono">{hhmm(payload[0].payload.k)} · {fkW(payload[0].payload.v)}</span></div>
+            ? <div className="chart-tip" style={{ minWidth: 0 }}><span className="mono">{payload[0].payload.live ? 'Now' : hhmm(payload[0].payload.k)} · {fkW(payload[0].payload.v)}</span></div>
             : null)} />
         </LineChart>
       </ResponsiveContainer>
@@ -85,7 +86,7 @@ function CustomRules({ rz, customRules, setCustomRules, toast }) {
   );
 }
 
-export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, customRules, setCustomRules, toast }) {
+export default function Alerts({ alerts, model, onAck, thresholds, setThresholds, customRules, setCustomRules, toast }) {
   const pal = usePal();
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState({ key: 'abs', dir: -1 });
@@ -98,12 +99,19 @@ export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, 
 
   const rows = useMemo(() => {
     const f = alerts.filter(a => filter === 'all' || a.sev === filter);
-    const val = a => (sort.key === 'sev' ? SEV_RANK[a.sev] : sort.key === 'zone' ? a.zone : sort.key === 'title' ? a.title : sort.key === 'status' ? a.status : a.abs * 1000 + a.id);
+    const val = a => (sort.key === 'sev' ? SEV_RANK[a.sev] : sort.key === 'zone' ? a.zone : sort.key === 'title' ? a.title : sort.key === 'status' ? a.status : a.at * 1000 + a.id);
     return f.slice().sort((a, b) => { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : 0) * sort.dir; }).slice(0, 100);
   }, [alerts, filter, sort]);
 
   const th = thresholds[rz];
-  const trig = useMemo(() => countTriggers(ZMAP[rz], th), [rz, th]);
+  const trig = useMemo(() => countTriggers(ZMAP[rz], th, model.abs), [rz, th, model.abs]);
+  const lz = model.zmap[rz], livePct = lz.pct;
+  const zoneRules = customRules.filter(r => r.zoneId === rz);
+  const brokenRule = zoneRules.filter(r => lz.cur > r.kw).sort((x, y) => y.kw - x.kw)[0];
+  const liveState = th.critOn && livePct >= th.crit ? ['critical', 'Above critical', pal.red]
+    : th.warnOn && livePct >= th.warn ? ['warning', 'Above warning', pal.amber]
+      : th.idleOn && lz.idleNow ? ['critical', 'Idle draw', pal.red]
+        : brokenRule ? [brokenRule.severity, `Over ${brokenRule.kw} kW rule`, sevColor(pal, brokenRule.severity)] : ['ok', 'Within limits', pal.green];
   const setTh = patch => setThresholds(t => ({ ...t, [rz]: { ...t[rz], ...patch } }));
 
   const hdr = (key, label, cls = '') => (
@@ -125,7 +133,7 @@ export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, 
           { value: 'warning', label: <><SevDot sev="warning" size={7} />Warning <span className="mono text-ink-3">({counts.warning})</span></> },
           { value: 'info', label: <><SevDot sev="info" size={7} />Info <span className="mono text-ink-3">({counts.info})</span></> },
         ]} />
-        <div className="text-xs text-ink-3">{activeCount} active · click a row to expand</div>
+        <div className="text-xs text-ink-3 flex items-center gap-2"><span className="live-dot" style={{ width: 6, height: 6 }} />Next check in <span className="mono text-ink-2">{fmtCountdown(model.nextReadingSec)}</span> · {activeCount} active · click a row to expand</div>
       </div>
 
       <div className="card" style={{ padding: 0 }}>
@@ -146,7 +154,8 @@ export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, 
                       <td className="px-4 py-3"><span className="inline-flex items-center gap-2"><SevDot sev={a.sev} /><span className="text-xs capitalize text-ink-2">{a.sev}</span></span></td>
                       <td className="px-4 py-3 font-medium whitespace-nowrap">{a.zone}</td>
                       <td className="px-4 py-3 text-ink-2">{a.title}</td>
-                      <td className="px-4 py-3 mono text-xs text-ink-3 whitespace-nowrap">{dateOf(a.abs).wd} {hhmm(a.abs)} IST</td>
+                      <td className="px-4 py-3 mono text-xs text-ink-3 whitespace-nowrap">{dateOf(a.abs).wd} {a.live ? clockOf(a.at) : hhmm(a.abs)} IST
+                        <div className="text-[10px] font-sans flex items-center gap-1.5">{fmtAgo((model.nowMs - a.at) / 1000)}{a.live && <span className="font-bold" style={{ color: pal.cyan }}>· LIVE</span>}</div></td>
                       <td className="px-4 py-3"><span className="text-[11px] font-semibold rounded-md px-2 py-1 capitalize" style={{ color: ss.color, background: ss.bg }}>{a.status}</span></td>
                     </motion.tr>
                     {isOpen && (
@@ -162,7 +171,7 @@ export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, 
                             </div>
                             <div className="flex flex-col gap-2">
                               <div className="text-xs text-ink-3 uppercase tracking-wider">Zone load ±2h</div>
-                              <div className="rounded-lg border border-line-subtle" style={{ background: 'var(--surface-1)' }}><Sparkline alert={a} abs={abs} /></div>
+                              <div className="rounded-lg border border-line-subtle" style={{ background: 'var(--surface-1)' }}><Sparkline alert={a} model={model} /></div>
                               <button className={`btn ${a.status === 'active' ? 'btn-primary' : ''}`} disabled={a.status !== 'active'} onClick={e => { e.stopPropagation(); onAck(a); }}>
                                 <Icon name="CheckCheck" size={14} />{a.status === 'active' ? 'Acknowledge' : a.status === 'acknowledged' ? 'Acknowledged' : 'Cleared'}
                               </button>
@@ -198,9 +207,25 @@ export default function Alerts({ alerts, abs, onAck, thresholds, setThresholds, 
               <div className="flex-1 text-sm text-ink-2">Idle draw detection <span className="text-ink-3 text-xs">(off-hours load &gt; 60% of base · {fkW(ZMAP[rz].baseLoad * 0.6)})</span></div>
               <Toggle on={th.idleOn} disabled={rz === 'server'} onChange={v => setTh({ idleOn: v })} />
             </div>
+            <div className="rounded-lg px-4 py-3" style={{ background: 'var(--surface-2)' }}>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <span className="live-dot" style={{ width: 7, height: 7 }} />
+                <span className="text-ink-2">Live now</span>
+                <span className="mono font-semibold">{fkW(lz.cur)}</span>
+                <span className="mono text-ink-3">{Math.round(livePct)}% cap.</span>
+                <span className="ml-auto text-[11px] font-bold uppercase tracking-wider rounded-md px-2 py-0.5" style={{ color: liveState[2], background: `color-mix(in srgb, ${liveState[2]} 14%, transparent)` }}>{liveState[1]}</span>
+              </div>
+              <div className="relative h-2.5 rounded-full mt-3" style={{ background: 'var(--surface-3)' }}>
+                <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, livePct)}%`, background: liveState[2], transition: 'width .9s ease, background .4s' }} />
+                {th.warnOn && <div className="absolute -top-1 -bottom-1 w-0.5 rounded" style={{ left: `${th.warn}%`, background: pal.amber }} title={`Warning ${th.warn}%`} />}
+                {th.critOn && <div className="absolute -top-1 -bottom-1 w-0.5 rounded" style={{ left: `${th.crit}%`, background: pal.red }} title={`Critical ${th.crit}%`} />}
+                {zoneRules.map(r => <div key={r.id} className="absolute -top-1 -bottom-1 w-0.5 rounded" style={{ left: `${Math.min(100, r.kw / lz.peakLoad * 100)}%`, background: pal.purple }} title={`Custom rule ${r.kw} kW`} />)}
+              </div>
+              <div className="flex justify-between text-[10px] text-ink-3 mt-1.5 mono"><span>0 kW</span><span>checked every second · next reading in {fmtCountdown(model.nextReadingSec)}</span><span>{lz.peakLoad} kW</span></div>
+            </div>
             <div className="rounded-lg px-4 py-3 text-sm flex items-center gap-3" style={{ background: 'var(--surface-2)' }}>
               <Icon name="History" size={16} className="text-ink-3" />
-              <span>Would have triggered <span className="mono font-bold" style={{ color: pal.cyan }}>{trig.total}</span> times this week · <span className="mono font-bold" style={{ color: pal.cyan }}>{n1(trig.hours)} h</span> in alert</span>
+              <span>Would have triggered <span className="mono font-bold" style={{ color: pal.cyan }}>{trig.total}</span> times in the last 7 days · <span className="mono font-bold" style={{ color: pal.cyan }}>{n1(trig.hours)} h</span> in alert</span>
               <span className="text-xs text-ink-3 ml-auto hidden sm:inline">{trig.warn} warning · {trig.crit} critical · {trig.idle} idle</span>
             </div>
           </div>
